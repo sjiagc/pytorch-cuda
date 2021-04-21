@@ -1,6 +1,7 @@
 #include <torch/torch.h>
 #include <torch/script.h>
 #include <cuda_runtime.h>
+#include <cuda.h>
 #include <iostream>
 
 class MyNet : torch::nn::Module {
@@ -147,13 +148,59 @@ float testData[1][28][28] =
 0.0000, 0.0000, 0.0000, 0.0000 }} };
 
 
+#define CUDA_DRVAPI_CALL(cudaAPI)                                                                               \
+    do {                                                                                                        \
+        CUresult errorCode = cudaAPI;                                                                           \
+        if (errorCode != CUDA_SUCCESS) {                                                                        \
+            const char *errName = nullptr;                                                                      \
+            cuGetErrorName(errorCode, &errName);                                                                \
+            std::cerr << "General error " << #cudaAPI << " returned error " << errName                          \
+                << " in " << __FUNCTION__ << "(" << __FILE__ << ":" << __LINE__ << ")"                          \
+                << std::endl;                                                                                   \
+            throw std::exception();                                                                             \
+        }                                                                                                       \
+    } while (0)
+
+void createCudaContext(CUcontext* outContext, int inGpu, CUctx_flags inFlags) {
+	CUdevice cuDevice = 0;
+	CUDA_DRVAPI_CALL(cuDeviceGet(&cuDevice, inGpu));
+	char szDeviceName[80];
+	CUDA_DRVAPI_CALL(cuDeviceGetName(szDeviceName, sizeof(szDeviceName), cuDevice));
+	std::cout << "GPU in use: " << szDeviceName << std::endl;
+	CUDA_DRVAPI_CALL(cuCtxCreate(outContext, inFlags, cuDevice));
+}
+
+//#define DRIVER_API
+
 int main() {
+	int deviceCount = 0;
+	cudaGetDeviceCount(&deviceCount);
+	std::cout << "Device count " << deviceCount << std::endl;
+
+#ifdef DRIVER_API
+	CUDA_DRVAPI_CALL(cuInit(0));
+	CUcontext roContext = nullptr;
+	CUdevice cuDevice = 0;
+	CUDA_DRVAPI_CALL(cuDeviceGet(&cuDevice, 0));
+	char szDeviceName[80];
+	CUDA_DRVAPI_CALL(cuDeviceGetName(szDeviceName, sizeof(szDeviceName), cuDevice));
+	std::cout << "GPU in use: " << szDeviceName << std::endl;
+	CUDA_DRVAPI_CALL(cuDevicePrimaryCtxRetain(&roContext, cuDevice));
+	std::cout << "Context primary " << roContext << std::endl;
+	CUDA_DRVAPI_CALL(cuCtxPushCurrent(roContext));
+
+	CUdeviceptr testData_d;
+	CUDA_DRVAPI_CALL(cuMemAlloc(&testData_d, sizeof(testData)));
+	CUDA_DRVAPI_CALL(cuMemcpyHtoD(testData_d, testData, sizeof(testData)));
+#else
 	float *testData_d;
 	cudaMalloc(&testData_d, sizeof(testData));
 	cudaMemcpy(testData_d, testData, sizeof(testData), cudaMemcpyHostToDevice);
+#endif
+
 	torch::Device device(torch::kCPU);
 	if (torch::cuda::is_available()) {
-		std::cout << "CUDA is available! Training on GPU." << std::endl;
+		std::cout << "CUDA is available! Inferencing on GPU." << std::endl;
 		device = torch::Device(torch::kCUDA);
 	}
 
@@ -167,7 +214,7 @@ int main() {
 		return -1;
 	}
 	module.to(device);
-	torch::Tensor t = torch::from_blob(testData_d, { 1, 28, 28 }, device);
+	torch::Tensor t = torch::from_blob((void*)testData_d, { 1, 28, 28 }, device);
 	std::vector<torch::jit::IValue> inputs{ t };
 	auto outTensor = module.forward(inputs);
 	std::cout << outTensor << std::endl;

@@ -1,12 +1,19 @@
 cmake_minimum_required(VERSION 3.0 FATAL_ERROR)
 project(example-app)
 
-set(Torch_DIR "D:/develop/3rd-party/libtorch/share/cmake/Torch")
+if (CMAKE_BUILD_TYPE MATCHES DEBUG)
+    message("Debug mode")
+    set(Torch_DIR "D:/develop/3rd-party/libtorch/debug/share/cmake/Torch")
+else ()
+    message("Release mode")
+    set(Torch_DIR "D:/develop/3rd-party/libtorch/release/share/cmake/Torch")
+endif ()
+
 find_package(Torch REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 add_executable(example-app example-app.cpp)
-target_link_libraries(example-app "${TORCH_LIBRARIES}")
+target_link_libraries(example-app "${TORCH_LIBRARIES}" ${CUDA_TOOLKIT_ROOT_DIR}/lib/x64/cuda.lib)
 set_property(TARGET example-app PROPERTY CXX_STANDARD 14)
 
 # The following code block is suggested to be used on Windows.

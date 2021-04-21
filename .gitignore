@@ -1,2 +1,4 @@
 /libtorch-infer/.vs
 /libtorch-infer/out
+/libtorch-infer/CMakeSettings.json
+
