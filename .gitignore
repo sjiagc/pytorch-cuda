@@ -1,4 +1,8 @@
 /libtorch-infer/.vs
 /libtorch-infer/out
 /libtorch-infer/CMakeSettings.json
-
+/training/.idea/
+/training/__pycache__/
+/training/data/
+/training/model.pt
+/training/model.pth

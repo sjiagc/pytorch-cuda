@@ -4,34 +4,6 @@
 #include <cuda.h>
 #include <iostream>
 
-class MyNet : torch::nn::Module {
-public:
-	MyNet()
-		: mLinearReluStack{
-			torch::nn::Linear(28 * 28, 512),
-			torch::nn::ReLU(),
-			torch::nn::Linear(512, 512),
-			torch::nn::ReLU(),
-			torch::nn::Linear(512, 10),
-			torch::nn::ReLU()
-		}
-	{
-	}
-
-	torch::Tensor forward(torch::Tensor inTensor) {
-		torch::Tensor tensor = inTensor.reshape({ inTensor.size(0), 28 * 28 });
-		tensor = mLinearReluStack->forward(tensor);
-		return torch::log_softmax(tensor, 1, c10::optional<torch::Dtype>());
-	}
-
-	torch::nn::Sequential getModel() const {
-		return mLinearReluStack;
-	}
-
-private:
-	torch::nn::Sequential mLinearReluStack;
-};
-
 // It's from Fashion MNIST test data indexed 100
 float testData[1][28][28] =
 { {{0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
@@ -161,6 +133,7 @@ float testData[1][28][28] =
         }                                                                                                       \
     } while (0)
 
+#ifdef DRIVER_API
 void createCudaContext(CUcontext* outContext, int inGpu, CUctx_flags inFlags) {
 	CUdevice cuDevice = 0;
 	CUDA_DRVAPI_CALL(cuDeviceGet(&cuDevice, inGpu));
@@ -169,6 +142,7 @@ void createCudaContext(CUcontext* outContext, int inGpu, CUctx_flags inFlags) {
 	std::cout << "GPU in use: " << szDeviceName << std::endl;
 	CUDA_DRVAPI_CALL(cuCtxCreate(outContext, inFlags, cuDevice));
 }
+#endif
 
 //#define DRIVER_API
 
@@ -204,16 +178,23 @@ int main() {
 		device = torch::Device(torch::kCUDA);
 	}
 
+	static const char const *MODEL_FILE_PATH = "model.pt";
+
+	std::ifstream is(MODEL_FILE_PATH, std::ios::binary);
+	if (!is) {
+		std::cerr << "Cannot open model file: " << MODEL_FILE_PATH << std::endl;
+		return -1;
+	}
+
 	torch::jit::script::Module module;
 	try {
 		// Deserialize the ScriptModule from a file using torch::jit::load().
-		module = torch::jit::load("model.pt");
+		module = torch::jit::load(is, device);
 	}
 	catch (const c10::Error& e) {
-		std::cerr << "error loading the model\n";
+		std::cerr << "error loading the model, " << e.what() << "\n";
 		return -1;
 	}
-	module.to(device);
 	torch::Tensor t = torch::from_blob((void*)testData_d, { 1, 28, 28 }, device);
 	std::vector<torch::jit::IValue> inputs{ t };
 	auto outTensor = module.forward(inputs);

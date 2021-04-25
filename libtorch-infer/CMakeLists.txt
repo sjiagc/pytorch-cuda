@@ -1,14 +1,6 @@
 cmake_minimum_required(VERSION 3.0 FATAL_ERROR)
 project(example-app)
 
-if (CMAKE_BUILD_TYPE MATCHES DEBUG)
-    message("Debug mode")
-    set(Torch_DIR "D:/develop/3rd-party/libtorch/debug/share/cmake/Torch")
-else ()
-    message("Release mode")
-    set(Torch_DIR "D:/develop/3rd-party/libtorch/release/share/cmake/Torch")
-endif ()
-
 find_package(Torch REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 

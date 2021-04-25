@@ -186,7 +186,7 @@ print("Done!")
 torch.save(model.state_dict(), "model.pth")
 print("Saved PyTorch Model State to model.pth")
 
-traced_script_module = torch.jit.trace(model, test_data[0][0])
+traced_script_module = torch.jit.trace(model, test_data[0][0].to(device))
 traced_script_module.save("model.pt")
 print("Saved Torch script model to model.pt")
 
@@ -200,6 +200,8 @@ print("Saved Torch script model to model.pt")
 
 model = NeuralNetwork()
 model.load_state_dict(torch.load("model.pth"))
+
+traced_script_module = torch.jit.load('model.pt')
 
 
 #############################################################
@@ -227,7 +229,7 @@ with torch.no_grad():
 
 x, y = test_data[5][0], test_data[5][1]
 with torch.no_grad():
-    pred = traced_script_module(x)
+    pred = traced_script_module(x.to(device))
     predicted, actual = classes[pred[0].argmax(0)], classes[y]
     print(f'Predicted: "{predicted}", Actual: "{actual}"')
 
