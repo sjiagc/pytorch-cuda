@@ -5,7 +5,7 @@
 #include <iostream>
 
 // It's from Fashion MNIST test data indexed 100
-float testData[1][28][28] =
+static const float TEST_DATA[1][28][28] =
 { {{0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000,
 0.0000, 0.1373, 0.2980, 0.2824, 0.0000, 0.0000, 0.0000, 0.0000,
 0.3176, 0.2980, 0.0078, 0.0706, 0.0000, 0.0000, 0.0000, 0.0000,
@@ -119,6 +119,9 @@ float testData[1][28][28] =
 0.3686, 0.1255, 0.0000, 0.0039, 0.0000, 0.0000, 0.0000, 0.0000,
 0.0000, 0.0000, 0.0000, 0.0000 }} };
 
+static const int BATCH_SIZE = 128;
+static const size_t TEST_DATA_SIZE = sizeof(TEST_DATA);
+static const size_t TEST_DATA_ELEMENT_COUNT = TEST_DATA_SIZE / sizeof(float);
 
 #define CUDA_DRVAPI_CALL(cudaAPI)                                                                               \
     do {                                                                                                        \
@@ -133,6 +136,15 @@ float testData[1][28][28] =
         }                                                                                                       \
     } while (0)
 
+double ms_now() {
+	double ret;
+	auto timePoint = std::chrono::high_resolution_clock::now().time_since_epoch();
+	ret = std::chrono::duration<double, std::milli>(timePoint).count();
+	return ret;
+}
+
+//#define DRIVER_API
+
 #ifdef DRIVER_API
 void createCudaContext(CUcontext* outContext, int inGpu, CUctx_flags inFlags) {
 	CUdevice cuDevice = 0;
@@ -144,12 +156,16 @@ void createCudaContext(CUcontext* outContext, int inGpu, CUctx_flags inFlags) {
 }
 #endif
 
-//#define DRIVER_API
-
 int main() {
+	static const int TEST_ROUND = 1000;
+
+	std::cout << "BATCH_SIZE = " << BATCH_SIZE << ", TEST_ROUND = " << TEST_ROUND << std::endl;
+
 	int deviceCount = 0;
 	cudaGetDeviceCount(&deviceCount);
 	std::cout << "Device count " << deviceCount << std::endl;
+
+	std::cout << "Preparing data" << std::endl;
 
 #ifdef DRIVER_API
 	CUDA_DRVAPI_CALL(cuInit(0));
@@ -164,14 +180,20 @@ int main() {
 	CUDA_DRVAPI_CALL(cuCtxPushCurrent(roContext));
 
 	CUdeviceptr testData_d;
-	CUDA_DRVAPI_CALL(cuMemAlloc(&testData_d, sizeof(testData)));
-	CUDA_DRVAPI_CALL(cuMemcpyHtoD(testData_d, testData, sizeof(testData)));
+	CUDA_DRVAPI_CALL(cuMemAlloc(&testData_d, TEST_DATA_SIZE * BATCH_SIZE));
+	for (int i = 0; i < BATCH_SIZE; ++i)
+		CUDA_DRVAPI_CALL(cuMemcpyHtoD(testData_d + TEST_DATA_ELEMENT_COUNT * i, TEST_DATA, TEST_DATA_SIZE));
 #else
 	float *testData_d;
-	cudaMalloc(&testData_d, sizeof(testData));
-	cudaMemcpy(testData_d, testData, sizeof(testData), cudaMemcpyHostToDevice);
+	cudaMalloc(&testData_d, TEST_DATA_SIZE * BATCH_SIZE);
+	for (int i = 0; i < BATCH_SIZE; ++i)
+		cudaMemcpy(testData_d + TEST_DATA_ELEMENT_COUNT * i, TEST_DATA, TEST_DATA_SIZE, cudaMemcpyHostToDevice);
 #endif
+	float* testData = new float[TEST_DATA_ELEMENT_COUNT * BATCH_SIZE];
+	for (int i = 0; i < BATCH_SIZE; ++i)
+		memcpy_s(testData + TEST_DATA_ELEMENT_COUNT * i, TEST_DATA_SIZE, TEST_DATA, TEST_DATA_SIZE);
 
+	torch::Device cpu(torch::kCPU);
 	torch::Device device(torch::kCPU);
 	if (torch::cuda::is_available()) {
 		std::cout << "CUDA is available! Inferencing on GPU." << std::endl;
@@ -195,9 +217,61 @@ int main() {
 		std::cerr << "error loading the model, " << e.what() << "\n";
 		return -1;
 	}
-	torch::Tensor t = torch::from_blob((void*)testData_d, { 1, 28, 28 }, device);
-	std::vector<torch::jit::IValue> inputs{ t };
-	auto outTensor = module.forward(inputs);
-	std::cout << outTensor << std::endl;
+	torch::Tensor t_d = torch::from_blob((void*)testData_d, { BATCH_SIZE, 1, 28, 28 }, device);
+	torch::Tensor t = torch::from_blob((void*)testData, { BATCH_SIZE, 1, 28, 28 });
+	// Warm up
+	std::cout << "Warming up" << std::endl;
+	for (int i = 0; i < 2; ++i) {
+		std::vector<torch::jit::IValue> inputs_d{ t_d };
+		auto outTensor = module.forward(inputs_d);
+	}
+	for (int i = 0; i < 2; ++i) {
+		std::vector<torch::jit::IValue> inputs{ t.to(device) };
+		auto outTensor = module.forward(inputs);
+	}
+	double ms = 0;
+	// GPU
+	std::cout << "Running with GPU input" << std::endl;
+	ms = ms_now();
+	for (int i = 0; i < TEST_ROUND; ++i) {
+		std::vector<torch::jit::IValue> inputs_d{ t_d };
+		auto outTensor = module.forward(inputs_d);
+	}
+	ms = ms_now() - ms;
+	std::cout << "Time GPU: " << ms << std::endl;
+	// CPU
+	std::cout << "Running with CPU input" << std::endl;
+	ms = ms_now();
+	for (int i = 0; i < TEST_ROUND; ++i) {
+		std::vector<torch::jit::IValue> inputs{ t.to(device) };
+		auto outTensor = module.forward(inputs);
+	}
+	ms = ms_now() - ms;
+	std::cout << "Time CPU: " << ms << std::endl;
+	// CPU
+	std::cout << "Running with CPU input, round 2" << std::endl;
+	ms = ms_now();
+	for (int i = 0; i < TEST_ROUND; ++i) {
+		std::vector<torch::jit::IValue> inputs{ t.to(device) };
+		auto outTensor = module.forward(inputs);
+	}
+	ms = ms_now() - ms;
+	std::cout << "Time CPU: " << ms << std::endl;
+	// GPU
+	std::cout << "Running with GPU input, round 2" << std::endl;
+	ms = ms_now();
+	for (int i = 0; i < TEST_ROUND; ++i) {
+		std::vector<torch::jit::IValue> inputs_d{ t_d };
+		auto outTensor = module.forward(inputs_d);
+	}
+	ms = ms_now() - ms;
+	std::cout << "Time GPU: " << ms << std::endl;
+
+#ifdef DRIVER_API
+	CUDA_DRVAPI_CALL(cuMemFree(testData_d));
+#else
+	cudaFree(testData_d);
+#endif
+	delete[] testData;
 }
 
